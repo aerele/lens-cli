@@ -1,0 +1,7 @@
+- id: lens-scan
+  name: Lens code audit
+  description: Run the Lens static audit on staged files and block on critical findings.
+  entry: lens scan
+  language: python
+  pass_filenames: false
+  stages: [pre-commit]
