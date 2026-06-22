@@ -34,7 +34,12 @@ class LensClient:
             raise LensNetworkError(str(e)) from e
         if resp.status_code in (401, 403):
             raise LensAuthError("Authentication failed. Run `lens login`.")
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            # A reachable-but-failing server (5xx, 429, 413, ...). Treat as a
+            # scan failure, not a client bug, so the CLI's fail-open logic decides.
+            raise LensNetworkError(f"server returned HTTP {resp.status_code}") from e
         return resp.json()
 
     def whoami(self) -> dict:
@@ -48,5 +53,8 @@ class LensClient:
             raise LensNetworkError(str(e)) from e
         if resp.status_code in (401, 403):
             raise LensAuthError("Authentication failed.")
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise LensNetworkError(f"server returned HTTP {resp.status_code}") from e
         return resp.json()

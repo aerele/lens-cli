@@ -99,3 +99,16 @@ def test_scan_not_configured_skips(monkeypatch):
     monkeypatch.setattr(climod, "load_credentials", lambda: None)
     result = runner.invoke(app, ["scan"])
     assert result.exit_code == 0
+
+
+def test_scan_skips_outside_git_repo(monkeypatch):
+    from lens_cli.collect import GitError
+
+    monkeypatch.setattr(climod, "load_credentials", lambda: Credentials("https://x", "k"))
+
+    def boom():
+        raise GitError("not a git repository (or no commits yet).")
+
+    monkeypatch.setattr(climod, "git_repo_root", boom)
+    result = runner.invoke(app, ["scan"])
+    assert result.exit_code == 0  # graceful skip, no traceback

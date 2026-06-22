@@ -7,7 +7,7 @@ import typer
 from rich.console import Console
 
 from lens_cli.client import LensAuthError, LensClient, LensNetworkError
-from lens_cli.collect import collect_payload, git_repo_root, staged_files
+from lens_cli.collect import GitError, collect_payload, git_repo_root, staged_files
 from lens_cli.config import (
     Credentials,
     load_credentials,
@@ -53,7 +53,6 @@ def whoami() -> None:
 
 @app.command()
 def scan(
-    all_files: bool = typer.Option(False, "--all", help="Scan all staged files (default)."),
     as_json: bool = typer.Option(False, "--json", help="Emit raw JSON instead of a table."),
 ) -> None:
     """Run a fast static audit on git-staged files (the pre-commit entry point)."""
@@ -63,22 +62,29 @@ def scan(
         _console.print("[yellow]Lens not configured. Run `lens login`. Skipping.[/yellow]")
         raise typer.Exit(code=0)
 
-    root = git_repo_root()
+    try:
+        root = git_repo_root()
+        files = staged_files()
+    except GitError as e:
+        _console.print(f"[yellow]lens scan skipped: {e}[/yellow]")
+        raise typer.Exit(code=0)
+
     repo_cfg = load_repo_config(root)
-    files = staged_files()
     payload = collect_payload(root, files, repo_cfg.ignore)
     if not payload:
         raise typer.Exit(code=0)
 
+    # Only the network call is fail-open. Rendering + thresholding run AFTER the
+    # try so a bug there surfaces instead of being mistaken for "server down".
     client = LensClient(creds, timeout=repo_cfg.timeout_seconds)
     try:
         result = client.scan(payload, repo_cfg.categories)
     except LensAuthError as e:
         _console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=0 if repo_cfg.fail_open else 1)
-    except (LensNetworkError, Exception) as e:  # noqa: BLE001 - fail-open is the point
+    except LensNetworkError as e:
         verb = "Skipping" if repo_cfg.fail_open else "Blocking"
-        _console.print(f"[yellow]Lens unreachable ({e}). {verb}.[/yellow]")
+        _console.print(f"[yellow]Lens scan could not run ({e}). {verb}.[/yellow]")
         raise typer.Exit(code=0 if repo_cfg.fail_open else 1)
 
     findings = result.get("findings", [])

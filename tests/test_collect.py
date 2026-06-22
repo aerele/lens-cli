@@ -27,3 +27,14 @@ def test_collect_includes_js_and_json(tmp_path):
     (tmp_path / "d.json").write_text("{}\n")
     payload = collect_payload(tmp_path, [Path("m.js"), Path("d.json")], ignore=[])
     assert {p["path"] for p in payload} == {"m.js", "d.json"}
+
+
+def test_collect_skips_symlinks(tmp_path):
+    # A staged symlink (even a scannable suffix) must never be followed, so a
+    # link to a secret file can't exfiltrate the target's content.
+    secret = tmp_path / "secret_outside"
+    secret.write_text("SECRET")
+    link = tmp_path / "evil.json"
+    link.symlink_to(secret)
+    payload = collect_payload(tmp_path, [Path("evil.json")], ignore=[])
+    assert payload == []

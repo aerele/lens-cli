@@ -31,3 +31,12 @@ def test_scan_network_error(httpx_mock):
     c = LensClient(Credentials("https://x", "k"), timeout=5)
     with pytest.raises(LensNetworkError):
         c.scan([], categories=None)
+
+
+def test_scan_500_raises_network_not_auth(httpx_mock):
+    # A reachable-but-failing server (5xx) is a scan failure -> LensNetworkError,
+    # so the CLI's fail-open logic decides (not swallowed, not an auth error).
+    httpx_mock.add_response(url="https://x/api/cli/scan", status_code=500, json={"detail": "boom"})
+    c = LensClient(Credentials("https://x", "k"), timeout=5)
+    with pytest.raises(LensNetworkError):
+        c.scan([], categories=None)
