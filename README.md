@@ -20,6 +20,20 @@ set `LENS_API_KEY` (and `LENS_API_URL` for a self-hosted Lens) instead.
 For the pre-commit hook below you don't need a global install: the pre-commit
 framework builds `lens-cli` for you from the pinned ref.
 
+## Commands
+
+| Command | What it does |
+|---|---|
+| `lens login` | Validate an API key and save it to `~/.config/lens/config.toml`. |
+| `lens whoami` | Print the email of the account the key belongs to. |
+| `lens scan` | Audit the git-staged files. Exits non-zero if anything crosses the threshold. This is what the pre-commit hook runs. |
+| `lens scan --json` | Same scan, machine-readable JSON output. |
+
+Auth resolution order: `LENS_API_KEY` / `LENS_API_URL` environment variables
+first (best for CI), then `~/.config/lens/config.toml`. If neither is present,
+`lens scan` prints a notice and exits 0 (it never blocks a teammate who hasn't
+set up Lens yet).
+
 ## Use as a pre-commit hook
 
 Add to your `.pre-commit-config.yaml`:
@@ -57,6 +71,32 @@ ignore:
   server would let a cloned repo redirect your API key to another host.
 
 Bypass a single commit with `git commit --no-verify`.
+
+## How it decides (exit codes)
+
+`lens scan` exits `0` (commit proceeds) or `1` (commit blocked):
+
+| Situation | Exit | Commit |
+|---|---|---|
+| A finding crosses `threshold` | `1` | blocked |
+| Findings exist but none cross the threshold | `0` | proceeds (findings printed as advice) |
+| No findings | `0` | proceeds |
+| Not configured (no key) | `0` | proceeds (notice printed) |
+| No scannable staged files | `0` | proceeds |
+| Server unreachable / errored | `0` if `fail_open: true` (default), else `1` |
+| Run outside a git repo | `0` | proceeds (skipped) |
+
+**Threshold meanings:** `off` blocks nothing · `trusted-critical` (default)
+blocks only high-confidence critical findings · `critical` blocks every critical
+· `warning` blocks criticals and warnings.
+
+## Privacy
+
+Only the **git-staged** `.py`, `.js`, and `.json` files are sent to the Lens
+server, never your whole repo. Symlinks are never followed, so a staged symlink
+can't ship a file from outside the repo. Files over 512 KB and non-UTF-8 files
+are skipped. To keep code on your own infrastructure, point `LENS_API_URL` at a
+self-hosted Lens.
 
 ## What this is not
 
