@@ -59,6 +59,32 @@ def test_scan_passes_when_no_blocking(monkeypatch, tmp_path):
     monkeypatch.setattr(climod, "LensClient", FakeClient)
     result = runner.invoke(app, ["scan"])
     assert result.exit_code == 0
+    assert "Lens CLI summary" in result.output
+    assert "Checked 1 staged file" in result.output
+
+
+def test_scan_json_stays_machine_readable(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path, RepoConfig())
+
+    response = {
+        "findings": [],
+        "scan_mode": "changed-files",
+        "engine_version": "static",
+    }
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def scan(self, files, categories):
+            return response
+
+    monkeypatch.setattr(climod, "LensClient", FakeClient)
+    result = runner.invoke(app, ["scan", "--json"])
+
+    assert result.exit_code == 0
+    assert "Lens CLI summary" not in result.output
+    assert '"scan_mode": "changed-files"' in result.output
 
 
 def test_scan_fail_open_on_network_error(monkeypatch, tmp_path):

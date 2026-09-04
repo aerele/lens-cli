@@ -54,7 +54,7 @@ and blocks the commit if any finding crosses the configured threshold.
 ```yaml
 block:
   threshold: trusted-critical        # trusted-critical (default) | critical | warning | off
-  categories: [security, framework]  # optional: only block on these categories
+  categories: [security, framework-fitness]  # optional: scan/block only these categories
 fail_open: true                      # allow the commit if the server is unreachable
 timeout_seconds: 15
 ignore:
@@ -90,6 +90,27 @@ Bypass a single commit with `git commit --no-verify`.
 blocks only high-confidence critical findings · `critical` blocks every critical
 · `warning` blocks criticals and warnings.
 
+Valid category values are `security`, `erpnext-conventions`,
+`framework-fitness`, `performance`, and `code-quality`. Omit `categories` to
+run all five.
+
+## CLI coverage vs full audit
+
+A clean CLI result means the staged files passed the checks that are sound with
+partial repository context. It is not a clean bill of health for the whole app.
+
+| Lens CLI covers on staged files | Full Lens audit additionally covers |
+|---|---|
+| Security rules such as injection, unsafe whitelisted endpoints, permission bypasses, and hardcoded secrets | Every applicable file in the repository, not only the current staged `.py`, `.js`, and `.json` files |
+| ERPNext and framework rules for database writes, controller overrides, child tables, hooks, scheduler events, lifecycle recursion, DocType JSON, and translations | Whole-app dead-code rules: `unused-function`, `unused-class`, and reachability-aware prioritisation |
+| Performance rules that are safe with changed-file context, including query-in-loop and repeated database-call patterns | Test-coverage rules: `untested-custom-app`, `doctype-untested`, and `doctype-stub-tests-only` |
+| Client-side checks for unsafe form events and invalid `frappe.call` / `frm.call` targets visible in the staged set | Index-hygiene rules: `over-indexed-write-heavy-field` and `missing-index-on-read-heavy-field` |
+| Code-quality checks for exception handling, imports, mutable defaults, commented code, duplicate blocks, and parse errors | Cross-file classification for `get-doc-in-loop`, permission bypasses, and nested-loop queries; LLM validation; weighted 0-100 score; prioritised HTML/PDF report |
+
+The normal terminal output includes this boundary in its scan summary and links
+directly to the hosted full-audit flow. `lens scan --json` remains raw,
+machine-readable server output.
+
 ## Privacy
 
 Only the **git-staged** `.py`, `.js`, and `.json` files are sent to the Lens
@@ -101,8 +122,8 @@ self-hosted Lens.
 ## What this is not
 
 The pre-commit scan is a **fast static check**: no LLM validation, scoring, or
-report. For the full LLM-validated, scored audit, share your Frappe app repo on
-the Lens platform at lens.aerele.in.
+report. For the full LLM-validated, scored audit, share your Frappe app repo at
+https://lens.aerele.in/audits/new.
 
 ## Develop
 

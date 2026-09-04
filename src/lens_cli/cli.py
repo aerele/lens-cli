@@ -92,5 +92,10 @@ def scan(
     if as_json:
         _console.print_json(json.dumps(result))
     else:
-        render_findings(findings, blocking)
+        render_findings(
+            findings,
+            blocking,
+            files_scanned=len(payload),
+            categories=repo_cfg.categories,
+        )
     raise typer.Exit(code=1 if blocking else 0)
