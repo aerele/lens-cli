@@ -40,3 +40,25 @@ def test_scan_500_raises_network_not_auth(httpx_mock):
     c = LensClient(Credentials("https://x", "k"), timeout=5)
     with pytest.raises(LensNetworkError):
         c.scan([], categories=None)
+
+
+def test_whoami_normalizes_nested_profile_response(httpx_mock):
+    """Current Lens servers return the profile under the ``user`` key."""
+    httpx_mock.add_response(
+        url="https://x/api/auth/me",
+        json={"user": {"email": "user@example.com"}, "billing_enabled": True},
+    )
+    c = LensClient(Credentials("https://x", "lens_pat_abc"), timeout=5)
+
+    assert c.whoami()["email"] == "user@example.com"
+
+
+def test_whoami_keeps_legacy_top_level_profile_response(httpx_mock):
+    """Remain compatible with self-hosted servers using the old response."""
+    httpx_mock.add_response(
+        url="https://x/api/auth/me",
+        json={"email": "legacy@example.com"},
+    )
+    c = LensClient(Credentials("https://x", "lens_pat_abc"), timeout=5)
+
+    assert c.whoami()["email"] == "legacy@example.com"

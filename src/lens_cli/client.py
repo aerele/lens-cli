@@ -57,4 +57,10 @@ class LensClient:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             raise LensNetworkError(f"server returned HTTP {resp.status_code}") from e
-        return resp.json()
+        data = resp.json()
+        # Current Lens servers wrap account fields in ``user`` alongside
+        # feature flags. Older/self-hosted servers returned the profile at the
+        # top level, so normalize the current shape without breaking either.
+        if isinstance(data, dict) and isinstance(data.get("user"), dict):
+            return data["user"]
+        return data
