@@ -3,6 +3,18 @@
 All notable changes to `lens-cli` are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## v0.2.0 — 2026-09-04
+
+- Support the current nested `/api/auth/me` response while remaining compatible
+  with older Lens servers, fixing `lens login` and `lens whoami`.
+- Add a post-scan summary that distinguishes staged-file static coverage from
+  the whole-repository, cross-file, LLM validation, scoring, and reporting
+  available in a full Lens audit.
+- Link the terminal summary directly to the hosted full-audit flow while
+  keeping `lens scan --json` machine-readable.
+- Document the CLI/full-audit rule boundary, valid category values, command
+  behavior, exit codes, and privacy controls.
+
 ## v0.1.0
 
 First release.
