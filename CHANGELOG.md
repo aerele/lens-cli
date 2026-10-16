@@ -3,6 +3,16 @@
 All notable changes to `lens-cli` are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+- Send large commits to the server in batches (at most 300 files / 5 MB each,
+  the server's per-request limits) instead of failing with HTTP 413, which
+  under the default `fail_open: true` let the commit through unscanned.
+- Explain scan failures: name the server's size limit on 413, report the
+  rate limit (and `Retry-After`, when sent) on 429, show the server's reason
+  on 401 (e.g. revoked key vs expired token), and include the server's detail
+  on other errors.
+
 ## v0.2.0 — 2026-09-04
 
 - Support the current nested `/api/auth/me` response while remaining compatible

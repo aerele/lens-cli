@@ -7,7 +7,13 @@ import typer
 from rich.console import Console
 
 from lens_cli.client import LensAuthError, LensClient, LensNetworkError
-from lens_cli.collect import GitError, collect_payload, git_repo_root, staged_files
+from lens_cli.collect import (
+    GitError,
+    batch_payload,
+    collect_payload,
+    git_repo_root,
+    staged_files,
+)
 from lens_cli.config import (
     Credentials,
     load_credentials,
@@ -76,9 +82,13 @@ def scan(
 
     # Only the network call is fail-open. Rendering + thresholding run AFTER the
     # try so a bug there surfaces instead of being mistaken for "server down".
+    # The server caps each request (file count + bytes), so a large commit is
+    # sent in batches; any failed batch fails the whole scan.
     client = LensClient(creds, timeout=repo_cfg.timeout_seconds)
     try:
-        result = client.scan(payload, repo_cfg.categories)
+        results = [
+            client.scan(batch, repo_cfg.categories) for batch in batch_payload(payload)
+        ]
     except LensAuthError as e:
         _console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=0 if repo_cfg.fail_open else 1)
@@ -87,7 +97,8 @@ def scan(
         _console.print(f"[yellow]Lens scan could not run ({e}). {verb}.[/yellow]")
         raise typer.Exit(code=0 if repo_cfg.fail_open else 1)
 
-    findings = result.get("findings", [])
+    result = {**results[0], "findings": [f for r in results for f in r.get("findings", [])]}
+    findings = result["findings"]
     blocking = should_block(findings, repo_cfg.threshold, repo_cfg.categories)
     if as_json:
         _console.print_json(json.dumps(result))
