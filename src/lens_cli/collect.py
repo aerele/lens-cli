@@ -7,6 +7,9 @@ from pathlib import Path
 
 SCANNABLE_SUFFIXES = {".py", ".js", ".json"}
 _MAX_FILE_BYTES = 512 * 1024
+# Per-request caps enforced by the server's /api/cli/scan (413 above either).
+MAX_BATCH_FILES = 300
+MAX_BATCH_BYTES = 5 * 1024 * 1024
 
 
 class GitError(Exception):
@@ -67,3 +70,28 @@ def collect_payload(root: Path, files: list[Path], ignore: list[str]) -> list[di
             continue
         payload.append({"path": rel_str, "content": content})
     return payload
+
+
+def batch_payload(
+    payload: list[dict],
+    max_files: int = MAX_BATCH_FILES,
+    max_bytes: int = MAX_BATCH_BYTES,
+) -> list[list[dict]]:
+    """Split a payload into batches the server will accept.
+
+    Files are sorted by path so a directory's files tend to share a batch,
+    keeping the server's within-request context as intact as possible.
+    """
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    current_bytes = 0
+    for item in sorted(payload, key=lambda f: f["path"]):
+        size = len(item["content"].encode("utf-8"))
+        if current and (len(current) >= max_files or current_bytes + size > max_bytes):
+            batches.append(current)
+            current, current_bytes = [], 0
+        current.append(item)
+        current_bytes += size
+    if current:
+        batches.append(current)
+    return batches

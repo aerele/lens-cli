@@ -14,6 +14,39 @@ class LensNetworkError(Exception):
     """Raised when the server is unreachable or times out."""
 
 
+def _detail(resp: httpx.Response) -> str:
+    """The server's ``{"detail": "..."}`` message, or "" if there isn't one."""
+    try:
+        detail = resp.json().get("detail")
+    except (ValueError, AttributeError):
+        return ""
+    return detail.rstrip(".") if isinstance(detail, str) else ""
+
+
+def _raise_for_status(resp: httpx.Response, auth_hint: str = "") -> None:
+    """Map an error response to a LensAuthError / LensNetworkError with a useful message."""
+    if resp.is_success:
+        return
+    detail = _detail(resp)
+    status = resp.status_code
+    if status in (401, 403):
+        raise LensAuthError(f"{detail or 'Authentication failed'}.{auth_hint}")
+    # A reachable-but-failing server (5xx, 429, 413, ...). Treat as a scan
+    # failure, not a client bug, so the CLI's fail-open logic decides.
+    if status == 413:
+        msg = (
+            f"server rejected the scan ({detail or 'payload too large'}). "
+            "Stage fewer files or add paths to `ignore` in .lens.yml"
+        )
+    elif status == 429:
+        retry = resp.headers.get("Retry-After")
+        wait = f"retry in {retry}s" if retry and retry.isdigit() else "try again shortly"
+        msg = f"Lens rate limit reached; {wait}"
+    else:
+        msg = f"server returned HTTP {status}" + (f": {detail}" if detail else "")
+    raise LensNetworkError(msg)
+
+
 class LensClient:
     def __init__(self, creds: Credentials, timeout: int = 15) -> None:
         self._creds = creds
@@ -32,14 +65,7 @@ class LensClient:
             )
         except httpx.HTTPError as e:
             raise LensNetworkError(str(e)) from e
-        if resp.status_code in (401, 403):
-            raise LensAuthError("Authentication failed. Run `lens login`.")
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            # A reachable-but-failing server (5xx, 429, 413, ...). Treat as a
-            # scan failure, not a client bug, so the CLI's fail-open logic decides.
-            raise LensNetworkError(f"server returned HTTP {resp.status_code}") from e
+        _raise_for_status(resp, auth_hint=" Run `lens login`.")
         return resp.json()
 
     def whoami(self) -> dict:
@@ -51,12 +77,7 @@ class LensClient:
             )
         except httpx.HTTPError as e:
             raise LensNetworkError(str(e)) from e
-        if resp.status_code in (401, 403):
-            raise LensAuthError("Authentication failed.")
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise LensNetworkError(f"server returned HTTP {resp.status_code}") from e
+        _raise_for_status(resp)
         data = resp.json()
         # Current Lens servers wrap account fields in ``user`` alongside
         # feature flags. Older/self-hosted servers returned the profile at the

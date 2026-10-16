@@ -117,7 +117,9 @@ Only the **git-staged** `.py`, `.js`, and `.json` files are sent to the Lens
 server, never your whole repo. Symlinks are never followed, so a staged symlink
 can't ship a file from outside the repo. Files over 512 KB and non-UTF-8 files
 are skipped. To keep code on your own infrastructure, point `LENS_API_URL` at a
-self-hosted Lens.
+self-hosted Lens. A large commit is sent in batches of at most 300 files / 5 MB
+(the server's per-request limits), and one blocking finding in any batch
+blocks the commit.
 
 ## What this is not
 

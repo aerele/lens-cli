@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from lens_cli.collect import collect_payload
+from lens_cli.collect import batch_payload, collect_payload
 
 
 def test_collect_filters_and_ignores(tmp_path):
@@ -38,3 +38,40 @@ def test_collect_skips_symlinks(tmp_path):
     link.symlink_to(secret)
     payload = collect_payload(tmp_path, [Path("evil.json")], ignore=[])
     assert payload == []
+
+
+def _item(path, size=1):
+    return {"path": path, "content": "x" * size}
+
+
+def test_batch_payload_single_batch_when_under_limits():
+    payload = [_item("b.py"), _item("a.py")]
+    batches = batch_payload(payload)
+    assert [[f["path"] for f in b] for b in batches] == [["a.py", "b.py"]]
+
+
+def test_batch_payload_splits_on_file_count():
+    payload = [_item(f"f{i:03}.py") for i in range(7)]
+    batches = batch_payload(payload, max_files=3)
+    assert [len(b) for b in batches] == [3, 3, 1]
+
+
+def test_batch_payload_splits_on_bytes():
+    payload = [_item("a.py", 40), _item("b.py", 40), _item("c.py", 40)]
+    batches = batch_payload(payload, max_bytes=100)
+    assert [[f["path"] for f in b] for b in batches] == [["a.py", "b.py"], ["c.py"]]
+
+
+def test_batch_payload_counts_utf8_bytes_not_chars():
+    # "é" is 2 bytes in UTF-8; the server measures encoded size.
+    payload = [{"path": "a.py", "content": "é" * 30}, {"path": "b.py", "content": "é" * 30}]
+    assert len(batch_payload(payload, max_bytes=100)) == 2
+
+
+def test_batch_payload_default_caps_match_server():
+    payload = [_item(f"f{i:04}.py") for i in range(301)]
+    assert [len(b) for b in batch_payload(payload)] == [300, 1]
+
+
+def test_batch_payload_empty():
+    assert batch_payload([]) == []

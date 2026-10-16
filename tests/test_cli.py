@@ -138,3 +138,95 @@ def test_scan_skips_outside_git_repo(monkeypatch):
     monkeypatch.setattr(climod, "git_repo_root", boom)
     result = runner.invoke(app, ["scan"])
     assert result.exit_code == 0  # graceful skip, no traceback
+
+
+def _finding(path, severity="warning", trusted=False):
+    return {
+        "rule_id": "r",
+        "severity": severity,
+        "category": "security",
+        "trusted": trusted,
+        "file": path,
+        "line": 1,
+        "message": "bad",
+    }
+
+
+def test_scan_sends_large_payload_in_batches_and_merges(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path, RepoConfig())
+    payload = [{"path": f"f{i:03}.py", "content": "x=1\n"} for i in range(301)]
+    monkeypatch.setattr(climod, "collect_payload", lambda *a, **k: payload)
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def scan(self, files, categories):
+            calls.append(len(files))
+            # Only the second batch has a blocking finding.
+            crit = len(calls) == 2
+            return {
+                "findings": [_finding(files[0]["path"], "critical" if crit else "warning", crit)],
+                "scan_mode": "changed-files",
+                "engine_version": "static",
+            }
+
+    monkeypatch.setattr(climod, "LensClient", FakeClient)
+    result = runner.invoke(app, ["scan"])
+
+    assert calls == [300, 1]
+    assert result.exit_code == 1  # a blocking finding in any batch blocks
+    assert "Checked 301 staged files · 2 findings · 1 blocking" in result.output
+
+
+def test_scan_json_merges_batches(monkeypatch, tmp_path):
+    import json
+
+    _patch_common(monkeypatch, tmp_path, RepoConfig())
+    payload = [{"path": f"f{i:03}.py", "content": "x=1\n"} for i in range(301)]
+    monkeypatch.setattr(climod, "collect_payload", lambda *a, **k: payload)
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def scan(self, files, categories):
+            return {
+                "findings": [_finding(files[0]["path"])],
+                "scan_mode": "changed-files",
+                "engine_version": "static",
+            }
+
+    monkeypatch.setattr(climod, "LensClient", FakeClient)
+    result = runner.invoke(app, ["scan", "--json"])
+
+    out = json.loads(result.output)
+    assert out["scan_mode"] == "changed-files"
+    assert [f["file"] for f in out["findings"]] == ["f000.py", "f300.py"]
+
+
+def test_scan_failed_batch_fails_whole_scan(monkeypatch, tmp_path):
+    from lens_cli.client import LensNetworkError
+
+    _patch_common(monkeypatch, tmp_path, RepoConfig(fail_open=False))
+    payload = [{"path": f"f{i:03}.py", "content": "x=1\n"} for i in range(301)]
+    monkeypatch.setattr(climod, "collect_payload", lambda *a, **k: payload)
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def scan(self, files, categories):
+            calls.append(len(files))
+            if len(calls) == 2:
+                raise LensNetworkError("Lens rate limit reached; retry in 5s")
+            return {"findings": [], "scan_mode": "changed-files", "engine_version": "static"}
+
+    monkeypatch.setattr(climod, "LensClient", FakeClient)
+    result = runner.invoke(app, ["scan"])
+
+    assert result.exit_code == 1
+    assert "rate limit reached; retry in 5s" in result.output
+    assert "Blocking" in result.output
