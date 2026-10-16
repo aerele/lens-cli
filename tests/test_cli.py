@@ -373,3 +373,69 @@ def test_whoami_server_error_exits_3(monkeypatch):
 
     monkeypatch.setattr(climod, "LensClient", FakeClient)
     assert runner.invoke(app, ["whoami"]).exit_code == 3
+
+
+def test_scan_diff_scans_changed_files(monkeypatch, tmp_path):
+    import json
+
+    _patch_common(monkeypatch, tmp_path, RepoConfig())
+    seen = {}
+
+    def fake_changed(base):
+        seen["base"] = base
+        return []
+
+    def boom():
+        raise AssertionError("staged_files must not be used with --diff")
+
+    monkeypatch.setattr(climod, "changed_files", fake_changed)
+    monkeypatch.setattr(climod, "staged_files", boom)
+    monkeypatch.setattr(climod, "LensClient", _client_returning([]))
+    result = runner.invoke(app, ["scan", "--diff", "origin/develop", "--json"])
+
+    assert result.exit_code == 0
+    assert seen["base"] == "origin/develop"
+    out = json.loads(result.stdout)
+    assert out["target"] == {"type": "diff", "base": "origin/develop"}
+
+
+def test_scan_diff_terminal_output_talks_about_changed_files(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path, RepoConfig())
+    monkeypatch.setattr(climod, "changed_files", lambda base: [])
+    crit = _finding("a.py", "critical", True)
+    monkeypatch.setattr(climod, "LensClient", _client_returning([crit]))
+    result = runner.invoke(app, ["scan", "--diff", "origin/develop"])
+
+    assert result.exit_code == 1
+    assert "Checked 1 changed file" in result.output
+    assert "Lens found 1 blocking finding" in result.output
+    assert "--no-verify" not in result.output  # not a commit in CI
+
+
+def test_scan_diff_bad_base_is_usage_error_even_when_fail_open(monkeypatch, tmp_path):
+    import json
+
+    from lens_cli.collect import GitError
+
+    _patch_common(monkeypatch, tmp_path, RepoConfig(fail_open=True))
+
+    def bad(base):
+        raise GitError(f"cannot resolve --diff base {base!r}")
+
+    monkeypatch.setattr(climod, "changed_files", bad)
+    result = runner.invoke(app, ["scan", "--diff", "origin/nope", "--json"])
+
+    assert result.exit_code == 2
+    out = json.loads(result.stdout)
+    assert out["status"] == "error"
+    assert out["error"]["kind"] == "usage"
+    assert "origin/nope" in result.stderr
+
+
+def test_scan_json_target_defaults_to_staged(monkeypatch, tmp_path):
+    import json
+
+    _patch_common(monkeypatch, tmp_path, RepoConfig())
+    monkeypatch.setattr(climod, "LensClient", _client_returning([]))
+    result = runner.invoke(app, ["scan", "--json"])
+    assert json.loads(result.stdout)["target"] == {"type": "staged"}

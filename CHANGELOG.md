@@ -21,6 +21,10 @@ All notable changes to `lens-cli` are documented here. This project follows
   envelope (`{"schema": 1, "status", "exit_code", "summary", "findings", ...}`)
   instead of the raw server response, on every run including skips and errors.
   Findings gain a `blocking` flag. Notices go to stderr so stdout is pure JSON.
+- Add `lens scan --diff BASE`: audit the files changed on `HEAD` since it
+  forked from `BASE`, for CI on a pull request. An unresolvable base or a
+  missing merge base exits `2` regardless of `fail_open`. The JSON envelope
+  gains `target`.
 
 ## v0.2.0 — 2026-09-04
 
