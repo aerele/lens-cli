@@ -1,6 +1,7 @@
+import pytest
 from pathlib import Path
 
-from lens_cli.collect import batch_payload, collect_payload
+from lens_cli.collect import GitError, batch_payload, changed_files, collect_payload
 
 
 def test_collect_filters_and_ignores(tmp_path):
@@ -75,3 +76,57 @@ def test_batch_payload_default_caps_match_server():
 
 def test_batch_payload_empty():
     assert batch_payload([]) == []
+
+
+def _git_repo(path, monkeypatch):
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=path, check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (path / "base.py").write_text("x = 1\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+    monkeypatch.chdir(path)
+    return git
+
+
+def test_changed_files_lists_branch_changes_since_fork(tmp_path, monkeypatch):
+    git = _git_repo(tmp_path, monkeypatch)
+    git("checkout", "-q", "-b", "feature")
+    (tmp_path / "new.py").write_text("y = 2\n")
+    (tmp_path / "base.py").write_text("x = 3\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "feature")
+    # A later commit on main must not show up: the diff is from the fork point.
+    git("checkout", "-q", "main")
+    (tmp_path / "main_only.py").write_text("z = 1\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "main moves on")
+    git("checkout", "-q", "feature")
+
+    assert sorted(p.as_posix() for p in changed_files("main")) == ["base.py", "new.py"]
+
+
+def test_changed_files_skips_deleted(tmp_path, monkeypatch):
+    git = _git_repo(tmp_path, monkeypatch)
+    git("checkout", "-q", "-b", "feature")
+    git("rm", "-q", "base.py")
+    git("commit", "-q", "-m", "delete")
+
+    assert changed_files("main") == []
+
+
+def test_changed_files_unknown_base(tmp_path, monkeypatch):
+    _git_repo(tmp_path, monkeypatch)
+    with pytest.raises(GitError, match="cannot resolve --diff base 'origin/nope'"):
+        changed_files("origin/nope")
+
+
+def test_changed_files_rejects_option_like_base(tmp_path, monkeypatch):
+    _git_repo(tmp_path, monkeypatch)
+    with pytest.raises(GitError, match="invalid --diff base"):
+        changed_files("--output=/tmp/x")

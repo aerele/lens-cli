@@ -11,6 +11,7 @@ from lens_cli.client import LensAuthError, LensClient, LensNetworkError
 from lens_cli.collect import (
     GitError,
     batch_payload,
+    changed_files,
     collect_payload,
     git_repo_root,
     staged_files,
@@ -32,6 +33,7 @@ _console = Console()
 EXIT_OK = 0
 EXIT_BLOCKED = 1
 EXIT_AUTH = 2
+EXIT_USAGE = 2
 EXIT_SERVER = 3
 
 # Version of the `lens scan --json` envelope. Bump only on a breaking change;
@@ -81,6 +83,7 @@ def _emit_json(
     result: dict | None = None,
     error: dict | None = None,
     reason: str | None = None,
+    diff_base: str | None = None,
 ) -> None:
     findings = findings or []
     blocking_ids = {id(f) for f in blocking or []}
@@ -91,6 +94,11 @@ def _emit_json(
                 "status": status,
                 "exit_code": exit_code,
                 "reason": reason,
+                "target": (
+                    {"type": "diff", "base": diff_base}
+                    if diff_base
+                    else {"type": "staged"}
+                ),
                 "error": error,
                 "scan_mode": (result or {}).get("scan_mode"),
                 "engine_version": (result or {}).get("engine_version"),
@@ -115,6 +123,13 @@ def scan(
     as_json: bool = typer.Option(
         False, "--json", help="Emit a versioned JSON envelope instead of a table."
     ),
+    diff: str | None = typer.Option(
+        None,
+        "--diff",
+        metavar="BASE",
+        help="Scan files changed on HEAD since it forked from BASE "
+        "(e.g. origin/develop) instead of staged files. For CI on a PR.",
+    ),
 ) -> None:
     """Run a fast static audit on git-staged files (the pre-commit entry point)."""
     # With --json, stdout carries only the envelope; notices go to stderr.
@@ -124,7 +139,7 @@ def scan(
         if message:
             notice.print(f"[yellow]{message}[/yellow]")
         if as_json:
-            _emit_json("skipped", EXIT_OK, reason=reason)
+            _emit_json("skipped", EXIT_OK, reason=reason, diff_base=diff)
         raise typer.Exit(code=EXIT_OK)
 
     creds = load_credentials()
@@ -134,9 +149,25 @@ def scan(
 
     try:
         root = git_repo_root()
-        files = staged_files()
     except GitError as e:
         skip("not-a-git-repo", f"lens scan skipped: {e}")
+    if diff is None:
+        files = staged_files()
+    else:
+        try:
+            files = changed_files(diff)
+        except GitError as e:
+            # An explicit --diff base that doesn't work is a usage error: fail
+            # loudly rather than pass CI with nothing scanned.
+            notice.print(f"[red]lens scan: {e}[/red]")
+            if as_json:
+                _emit_json(
+                    "error",
+                    EXIT_USAGE,
+                    error={"kind": "usage", "message": str(e), "fail_open": False},
+                    diff_base=diff,
+                )
+            raise typer.Exit(code=EXIT_USAGE)
 
     repo_cfg = load_repo_config(root)
     payload = collect_payload(root, files, repo_cfg.ignore)
@@ -167,6 +198,7 @@ def scan(
                 files_scanned=len(payload),
                 repo_cfg=repo_cfg,
                 error={"kind": kind, "message": str(e), "fail_open": repo_cfg.fail_open},
+                diff_base=diff,
             )
         raise typer.Exit(code=code)
 
@@ -183,6 +215,7 @@ def scan(
             files_scanned=len(payload),
             repo_cfg=repo_cfg,
             result=result,
+            diff_base=diff,
         )
     else:
         render_findings(
@@ -190,5 +223,6 @@ def scan(
             blocking,
             files_scanned=len(payload),
             categories=repo_cfg.categories,
+            scope="changed" if diff else "staged",
         )
     raise typer.Exit(code=code)

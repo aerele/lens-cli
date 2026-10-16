@@ -57,16 +57,17 @@ def render_scan_summary(
     *,
     files_scanned: int,
     categories: list[str] | None,
+    scope: str = "staged",
 ) -> None:
     """Explain the changed-file result and the value of a full Lens audit."""
     _console.print("\n[bold]Lens CLI summary[/bold]")
     _console.print(
-        f"Checked {files_scanned} staged {_plural(files_scanned, 'file')} · "
+        f"Checked {files_scanned} {scope} {_plural(files_scanned, 'file')} · "
         f"{len(findings)} {_plural(len(findings), 'finding')} · "
         f"{len(blocking)} blocking"
     )
     _console.print(
-        f"Staged-file coverage: {_coverage_labels(categories)} static checks."
+        f"{scope.capitalize()}-file coverage: {_coverage_labels(categories)} static checks."
     )
     _console.print(
         "[dim]Full audit adds: whole-repository context; dead code, test coverage "
@@ -85,9 +86,10 @@ def render_findings(
     *,
     files_scanned: int,
     categories: list[str] | None,
+    scope: str = "staged",
 ) -> None:
     if not findings:
-        _console.print("[green]Lens: no findings on staged files.[/green]")
+        _console.print(f"[green]Lens: no findings on {scope} files.[/green]")
     else:
         blocking_ids = {id(f) for f in blocking}
         for f in findings:
@@ -97,7 +99,7 @@ def render_findings(
                 f"{tag} [bold]{f.get('rule_id')}[/bold] ({f.get('severity')}) {loc}\n"
                 f"    {f.get('message')}"
             )
-        if blocking:
+        if blocking and scope == "staged":
             _console.print(
                 f"\n[red]Lens blocked this commit: {len(blocking)} "
                 f"{_plural(len(blocking), 'blocking finding')}.[/red]"
@@ -106,9 +108,16 @@ def render_findings(
                 "Fix them, widen the threshold in .lens.yml, or commit with "
                 "--no-verify to bypass."
             )
+        elif blocking:
+            _console.print(
+                f"\n[red]Lens found {len(blocking)} "
+                f"{_plural(len(blocking), 'blocking finding')}.[/red]"
+            )
+            _console.print("Fix them or widen the threshold in .lens.yml.")
     render_scan_summary(
         findings,
         blocking,
         files_scanned=files_scanned,
         categories=categories,
+        scope=scope,
     )

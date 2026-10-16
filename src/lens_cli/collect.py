@@ -38,6 +38,28 @@ def staged_files() -> list[Path]:
     return [Path(line) for line in out.splitlines() if line.strip()]
 
 
+def changed_files(base: str) -> list[Path]:
+    """Relative paths of files added/copied/modified on HEAD since it forked from ``base``."""
+    if base.startswith("-"):
+        # Would be parsed as a git option, not a ref.
+        raise GitError(f"invalid --diff base {base!r}.")
+    try:
+        _git(["rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"])
+    except GitError as e:
+        raise GitError(
+            f"cannot resolve --diff base {base!r}; fetch it first "
+            f"(e.g. `git fetch origin {base.removeprefix('origin/')}`)."
+        ) from e
+    try:
+        out = _git(["diff", "--name-only", "--diff-filter=ACM", f"{base}...HEAD"])
+    except GitError as e:
+        raise GitError(
+            f"no merge base between {base!r} and HEAD; in a shallow clone, "
+            "fetch more history (e.g. `fetch-depth: 0`)."
+        ) from e
+    return [Path(line) for line in out.splitlines() if line.strip()]
+
+
 def collect_payload(root: Path, files: list[Path], ignore: list[str]) -> list[dict]:
     """Read scannable staged files into ``[{"path", "content"}]``.
 

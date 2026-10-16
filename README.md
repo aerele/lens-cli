@@ -27,6 +27,7 @@ framework builds `lens-cli` for you from the pinned ref.
 | `lens login` | Validate an API key and save it to `~/.config/lens/config.toml`. |
 | `lens whoami` | Print the email of the account the key belongs to. |
 | `lens scan` | Audit the git-staged files. Exits non-zero if anything crosses the threshold. This is what the pre-commit hook runs. |
+| `lens scan --diff BASE` | Audit the files changed on `HEAD` since it forked from `BASE` (e.g. `origin/develop`), instead of staged files. For CI on a pull request; see [Use in CI](#use-in-ci). |
 | `lens scan --json` | Same scan, as a versioned JSON envelope on stdout (see [JSON output](#json-output)). |
 
 Auth resolution order: `LENS_API_KEY` / `LENS_API_URL` environment variables
@@ -48,6 +49,30 @@ repos:
 
 Then `pre-commit install`. On every commit, `lens scan` checks the staged files
 and blocks the commit if any finding crosses the configured threshold.
+
+## Use in CI
+
+`lens scan --diff BASE` audits every file a branch changed, the same checks the
+hook runs on staged files, so it fits a pull-request job:
+
+```yaml
+# GitHub Actions
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0              # --diff needs the merge base
+- run: pipx install git+https://github.com/aerele/lens-cli@v0.3.0
+- run: lens scan --diff origin/${{ github.base_ref }} --json > lens.json
+  env:
+    LENS_API_KEY: ${{ secrets.LENS_API_KEY }}
+```
+
+Set `fail_open: false` in `.lens.yml` if a Lens outage should fail the job
+(exit `3`) rather than pass it. A `BASE` that can't be resolved, or a shallow
+clone with no merge base, always exits `2` instead of passing with nothing
+scanned.
+
+`--diff` is still a changed-files scan, not a whole-repository audit: rules
+that need the full repo don't run (see [CLI coverage vs full audit](#cli-coverage-vs-full-audit)).
 
 ## Configure per repo — `.lens.yml`
 
@@ -136,6 +161,7 @@ a breaking change bumps it.
   "status": "blocked",
   "exit_code": 1,
   "reason": null,
+  "target": {"type": "staged"},
   "error": null,
   "scan_mode": "changed-files",
   "engine_version": "0.1.0+rules.225da1a4c770",
@@ -158,7 +184,8 @@ a breaking change bumps it.
 
 - `status`: `passed` · `blocked` · `skipped` · `error`.
 - `reason` (when `skipped`): `not-configured` · `not-a-git-repo` · `no-files`.
-- `error` (when `error`): `{"kind": "auth" | "server", "message": str, "fail_open": bool}`.
+- `target`: `{"type": "staged"}` or `{"type": "diff", "base": "origin/develop"}`.
+- `error` (when `error`): `{"kind": "auth" | "server" | "usage", "message": str, "fail_open": bool}`.
 - `scan_mode` / `engine_version` come from the server and are `null` when no
   scan ran. Treat `engine_version` as a cache key, not a behaviour guarantee.
 - Each finding carries the server's fields as sent (`line` may be `null` for
