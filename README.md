@@ -27,7 +27,7 @@ framework builds `lens-cli` for you from the pinned ref.
 | `lens login` | Validate an API key and save it to `~/.config/lens/config.toml`. |
 | `lens whoami` | Print the email of the account the key belongs to. |
 | `lens scan` | Audit the git-staged files. Exits non-zero if anything crosses the threshold. This is what the pre-commit hook runs. |
-| `lens scan --json` | Same scan, machine-readable JSON output. |
+| `lens scan --json` | Same scan, as a versioned JSON envelope on stdout (see [JSON output](#json-output)). |
 
 Auth resolution order: `LENS_API_KEY` / `LENS_API_URL` environment variables
 first (best for CI), then `~/.config/lens/config.toml`. If neither is present,
@@ -74,7 +74,18 @@ Bypass a single commit with `git commit --no-verify`.
 
 ## How it decides (exit codes)
 
-`lens scan` exits `0` (commit proceeds) or `1` (commit blocked):
+Exit codes are stable, so CI can tell "found problems" from "couldn't run":
+
+| Code | Meaning |
+|---|---|
+| `0` | Passed, skipped, or a failure let through by `fail_open` |
+| `1` | A finding crosses the blocking threshold |
+| `2` | Authentication problem (invalid/revoked key, not logged in) or bad usage |
+| `3` | Server unreachable, rate-limited, or errored |
+
+With `fail_open: true` (the default), `lens scan` turns `2` and `3` into `0` so
+a broken Lens setup never wedges `git commit`; set `fail_open: false` in CI to
+see them. `lens login` and `lens whoami` always return `2` / `3` on failure.
 
 | Situation | Exit | Commit |
 |---|---|---|
@@ -83,7 +94,8 @@ Bypass a single commit with `git commit --no-verify`.
 | No findings | `0` | proceeds |
 | Not configured (no key) | `0` | proceeds (notice printed) |
 | No scannable staged files | `0` | proceeds |
-| Server unreachable / errored | `0` if `fail_open: true` (default), else `1` |
+| Key rejected by the server | `0` if `fail_open: true` (default), else `2` | |
+| Server unreachable / errored / rate-limited | `0` if `fail_open: true` (default), else `3` | |
 | Run outside a git repo | `0` | proceeds (skipped) |
 
 **Threshold meanings:** `off` blocks nothing · `trusted-critical` (default)
@@ -108,8 +120,49 @@ partial repository context. It is not a clean bill of health for the whole app.
 | Code-quality checks for exception handling, imports, mutable defaults, commented code, duplicate blocks, and parse errors | Cross-file classification for `get-doc-in-loop`, permission bypasses, and nested-loop queries; LLM validation; weighted 0-100 score; prioritised HTML/PDF report |
 
 The normal terminal output includes this boundary in its scan summary and links
-directly to the hosted full-audit flow. `lens scan --json` remains raw,
-machine-readable server output.
+directly to the hosted full-audit flow. `lens scan --json` leaves the summary
+out and emits only the JSON envelope.
+
+## JSON output
+
+`lens scan --json` writes exactly one JSON object to stdout on every run,
+including skips and errors; human-readable notices go to stderr. The envelope
+is versioned by `schema`. Fields are only ever added within a schema version;
+a breaking change bumps it.
+
+```json
+{
+  "schema": 1,
+  "status": "blocked",
+  "exit_code": 1,
+  "reason": null,
+  "error": null,
+  "scan_mode": "changed-files",
+  "engine_version": "0.1.0+rules.225da1a4c770",
+  "summary": {
+    "files_scanned": 3,
+    "findings": 2,
+    "blocking": 1,
+    "threshold": "trusted-critical",
+    "categories": null
+  },
+  "findings": [
+    {
+      "rule_id": "...", "severity": "critical", "category": "security",
+      "file": "app/api.py", "line": 42, "message": "...", "trusted": true,
+      "blocking": true
+    }
+  ]
+}
+```
+
+- `status`: `passed` · `blocked` · `skipped` · `error`.
+- `reason` (when `skipped`): `not-configured` · `not-a-git-repo` · `no-files`.
+- `error` (when `error`): `{"kind": "auth" | "server", "message": str, "fail_open": bool}`.
+- `scan_mode` / `engine_version` come from the server and are `null` when no
+  scan ran. Treat `engine_version` as a cache key, not a behaviour guarantee.
+- Each finding carries the server's fields as sent (`line` may be `null` for
+  file-level findings; newer servers add more, such as `fix`) plus `blocking`.
 
 ## Privacy
 
