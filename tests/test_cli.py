@@ -118,7 +118,7 @@ def test_scan_fail_closed_blocks_on_network_error(monkeypatch, tmp_path):
 
     monkeypatch.setattr(climod, "LensClient", FailClient)
     result = runner.invoke(app, ["scan"])
-    assert result.exit_code == 1  # fail closed blocks the commit
+    assert result.exit_code == 3  # fail closed: server error, distinct from findings
 
 
 def test_scan_not_configured_skips(monkeypatch):
@@ -227,6 +227,149 @@ def test_scan_failed_batch_fails_whole_scan(monkeypatch, tmp_path):
     monkeypatch.setattr(climod, "LensClient", FakeClient)
     result = runner.invoke(app, ["scan"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "rate limit reached; retry in 5s" in result.output
     assert "Blocking" in result.output
+
+
+def _client_returning(findings):
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def scan(self, files, categories):
+            return {
+                "findings": findings,
+                "scan_mode": "changed-files",
+                "engine_version": "0.1.0+rules.abc",
+            }
+
+    return FakeClient
+
+
+def _client_raising(exc):
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def scan(self, files, categories):
+            raise exc
+
+    return FakeClient
+
+
+def test_scan_fail_closed_auth_error_exits_2(monkeypatch, tmp_path):
+    from lens_cli.client import LensAuthError
+
+    _patch_common(monkeypatch, tmp_path, RepoConfig(fail_open=False))
+    monkeypatch.setattr(climod, "LensClient", _client_raising(LensAuthError("Invalid token.")))
+    result = runner.invoke(app, ["scan"])
+    assert result.exit_code == 2
+
+
+def test_scan_fail_open_auth_error_exits_0(monkeypatch, tmp_path):
+    from lens_cli.client import LensAuthError
+
+    _patch_common(monkeypatch, tmp_path, RepoConfig(fail_open=True))
+    monkeypatch.setattr(climod, "LensClient", _client_raising(LensAuthError("Invalid token.")))
+    result = runner.invoke(app, ["scan"])
+    assert result.exit_code == 0
+
+
+def test_scan_json_envelope_on_block(monkeypatch, tmp_path):
+    import json
+
+    _patch_common(monkeypatch, tmp_path, RepoConfig())
+    warn = _finding("a.py")
+    crit = {**_finding("a.py", "critical", True), "fix": "Use frappe.get_doc()."}
+    monkeypatch.setattr(climod, "LensClient", _client_returning([warn, crit]))
+    result = runner.invoke(app, ["scan", "--json"])
+
+    assert result.exit_code == 1
+    out = json.loads(result.stdout)
+    assert out["schema"] == 1
+    assert out["status"] == "blocked"
+    assert out["exit_code"] == 1
+    assert out["error"] is None
+    assert out["engine_version"] == "0.1.0+rules.abc"
+    assert out["summary"] == {
+        "files_scanned": 1,
+        "findings": 2,
+        "blocking": 1,
+        "threshold": "trusted-critical",
+        "categories": None,
+    }
+    assert [f["blocking"] for f in out["findings"]] == [False, True]
+    # Server fields pass through untouched, including ones added later.
+    assert out["findings"][1]["fix"] == "Use frappe.get_doc()."
+
+
+def test_scan_json_envelope_on_pass(monkeypatch, tmp_path):
+    import json
+
+    _patch_common(monkeypatch, tmp_path, RepoConfig())
+    monkeypatch.setattr(climod, "LensClient", _client_returning([]))
+    result = runner.invoke(app, ["scan", "--json"])
+
+    assert result.exit_code == 0
+    out = json.loads(result.stdout)
+    assert (out["status"], out["findings"]) == ("passed", [])
+
+
+def test_scan_json_envelope_on_server_error_keeps_stdout_pure(monkeypatch, tmp_path):
+    import json
+
+    from lens_cli.client import LensNetworkError
+
+    _patch_common(monkeypatch, tmp_path, RepoConfig(fail_open=True))
+    monkeypatch.setattr(climod, "LensClient", _client_raising(LensNetworkError("down")))
+    result = runner.invoke(app, ["scan", "--json"])
+
+    assert result.exit_code == 0
+    out = json.loads(result.stdout)  # the notice went to stderr, not stdout
+    assert out["status"] == "error"
+    assert out["error"] == {"kind": "server", "message": "down", "fail_open": True}
+    assert "could not run" in result.stderr
+
+
+def test_scan_json_envelope_when_not_configured(monkeypatch):
+    import json
+
+    monkeypatch.setattr(climod, "load_credentials", lambda: None)
+    result = runner.invoke(app, ["scan", "--json"])
+
+    assert result.exit_code == 0
+    out = json.loads(result.stdout)
+    assert (out["status"], out["reason"]) == ("skipped", "not-configured")
+
+
+def test_scan_json_envelope_when_no_scannable_files(monkeypatch, tmp_path):
+    import json
+
+    _patch_common(monkeypatch, tmp_path, RepoConfig())
+    monkeypatch.setattr(climod, "collect_payload", lambda *a, **k: [])
+    result = runner.invoke(app, ["scan", "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["reason"] == "no-files"
+
+
+def test_whoami_not_logged_in_exits_2(monkeypatch):
+    monkeypatch.setattr(climod, "load_credentials", lambda: None)
+    assert runner.invoke(app, ["whoami"]).exit_code == 2
+
+
+def test_whoami_server_error_exits_3(monkeypatch):
+    from lens_cli.client import LensNetworkError
+
+    monkeypatch.setattr(climod, "load_credentials", lambda: Credentials("https://x", "k"))
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def whoami(self):
+            raise LensNetworkError("down")
+
+    monkeypatch.setattr(climod, "LensClient", FakeClient)
+    assert runner.invoke(app, ["whoami"]).exit_code == 3

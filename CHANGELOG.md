@@ -12,6 +12,15 @@ All notable changes to `lens-cli` are documented here. This project follows
   rate limit (and `Retry-After`, when sent) on 429, show the server's reason
   on 401 (e.g. revoked key vs expired token), and include the server's detail
   on other errors.
+- **Breaking for CI scripts:** stable exit codes. `0` pass/skip, `1` blocking
+  findings, `2` auth or usage problem, `3` server error. `fail_open: true` (the
+  default) still exits `0` on errors, so pre-commit behaviour is unchanged;
+  with `fail_open: false`, auth and server failures now exit `2` / `3` instead
+  of `1`. `lens login` / `lens whoami` exit `2` / `3` instead of `1`.
+- **Breaking for `--json` consumers:** `lens scan --json` now emits a versioned
+  envelope (`{"schema": 1, "status", "exit_code", "summary", "findings", ...}`)
+  instead of the raw server response, on every run including skips and errors.
+  Findings gain a `blocking` flag. Notices go to stderr so stdout is pure JSON.
 
 ## v0.2.0 — 2026-09-04
 
